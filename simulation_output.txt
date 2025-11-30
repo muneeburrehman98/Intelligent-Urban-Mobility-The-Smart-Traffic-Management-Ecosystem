@@ -1,0 +1,38 @@
+Initializing Intelligent Traffic Management System...
+Spawning vehicles...
+Starting Simulation (Duration: 20 seconds)...
+[Time 0] Intersection 4 switched Green Light to Road 104
+[Time 0] Intersection 2 switched Green Light to Road 102
+[Time 0] Intersection 1 switched Green Light to Road 101
+[Time 0] Intersection 3 switched Green Light to Road 103
+[Time 0] Intersection 0 switched Green Light to Road -1
+[Time 1.66667] Vehicle 2 arrived at Intersection 3
+[Time 2] Vehicle 1 arrived at Intersection 1
+[Time 2] Vehicle 911 arrived at Intersection 1
+[Time 3.66667] Vehicle 2 arrived at Intersection 4
+  -> Vehicle 2 reached destination!
+[Time 4] Vehicle 1 arrived at Intersection 2
+  -> Vehicle 1 reached destination!
+[Time 4] Vehicle 911 arrived at Intersection 2
+  -> Vehicle 911 reached destination!
+[Time 5] Intersection 4 switched Green Light to Road 104
+[Time 5] Intersection 0 switched Green Light to Road -1
+[Time 5] Intersection 2 switched Green Light to Road 102
+[Time 5] Intersection 3 switched Green Light to Road 103
+[Time 5] Intersection 1 switched Green Light to Road 101
+[Time 10] Intersection 4 switched Green Light to Road 104
+[Time 10] Intersection 3 switched Green Light to Road 103
+[Time 10] Intersection 1 switched Green Light to Road 101
+[Time 10] Intersection 0 switched Green Light to Road -1
+[Time 10] Intersection 2 switched Green Light to Road 102
+[Time 15] Intersection 4 switched Green Light to Road 104
+[Time 15] Intersection 0 switched Green Light to Road -1
+[Time 15] Intersection 2 switched Green Light to Road 102
+[Time 15] Intersection 3 switched Green Light to Road 103
+[Time 15] Intersection 1 switched Green Light to Road 101
+[Time 20] Intersection 4 switched Green Light to Road 104
+[Time 20] Intersection 3 switched Green Light to Road 103
+[Time 20] Intersection 1 switched Green Light to Road 101
+[Time 20] Intersection 0 switched Green Light to Road -1
+[Time 20] Intersection 2 switched Green Light to Road 102
+Simulation Complete.
