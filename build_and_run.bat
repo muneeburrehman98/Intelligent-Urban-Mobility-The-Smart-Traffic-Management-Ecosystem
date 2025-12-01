@@ -9,5 +9,6 @@ if %errorlevel% neq 0 (
 )
 echo Compilation Successful!
 echo Running Simulation...
-main.exe > output.txt
+:: CHANGED: Now writing to simulation_output.txt to match the visualizer
+main.exe > simulation_output.txt
 pause

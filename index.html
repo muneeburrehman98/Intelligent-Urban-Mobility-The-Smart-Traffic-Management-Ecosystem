@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Intelligent Urban Mobility Visualizer</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        #controls {
+            background-color: #2d2d2d;
+            padding: 15px;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            z-index: 10;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.2rem;
+            color: #4CAF50;
+            margin-right: 20px;
+        }
+
+        input[type="file"] {
+            background: #444;
+            padding: 5px;
+            border-radius: 4px;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+        }
+
+        #status {
+            color: #aaa;
+            font-size: 0.9rem;
+            margin-left: auto;
+        }
+
+        #canvas-container {
+            flex-grow: 1;
+            position: relative;
+            background-color: #2e7d32; /* Grass Green */
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        /* Overlay for stats */
+        #stats-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <h1>🚦 Smart City Traffic</h1>
+        
+        <div class="control-group">
+            <input type="file" id="fileInput" accept=".txt">
+        </div>
+
+        <div class="control-group">
+            <button id="btnPlay" disabled>Play</button>
+            <button id="btnPause" disabled>Pause</button>
+            <button id="btnReset" disabled>Reset</button>
+        </div>
+
+        <div class="control-group">
+            <label>Speed:</label>
+            <input type="range" id="speedRange" min="1" max="10" value="1">
+            <span id="speedValue">1x</span>
+        </div>
+
+        <div id="status">Waiting for simulation_output.txt...</div>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="simCanvas"></canvas>
+        <div id="stats-overlay">
+            Time: <span id="simTime">0.00</span>s<br>
+            Vehicles: <span id="vehicleCount">0</span>
+        </div>
+    </div>
+
+    <script>
+        // --- CONSTANTS & CONFIG ---
+        const LANE_WIDTH = 10; // Width of a single lane
+        const CAR_LENGTH = 12;
+        const CAR_WIDTH = 6;
+        const INTERSECTION_RADIUS = 15;
+        
+        // --- STATE ---
+        let rawData = null;
+        let staticGraph = { nodes: {}, edges: {} }; // edges key: roadID
+        let frames = []; // Array of { time, vehicles: [], lights: [] }
+        let isPlaying = false;
+        let currentFrameIndex = 0;
+        let playbackSpeed = 1;
+        let animationId = null;
+        
+        // Canvas
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        let transform = { x: 0, y: 0, scale: 1 };
+        let isDragging = false;
+        let dragStart = { x: 0, y: 0 };
+
+        // --- INIT ---
+        function resizeCanvas() {
+            canvas.width = document.getElementById('canvas-container').clientWidth;
+            canvas.height = document.getElementById('canvas-container').clientHeight;
+            drawFrame();
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // --- FILE PARSING ---
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                document.getElementById('status').innerText = "Parsing data...";
+                parseSimulationData(e.target.result);
+            };
+            reader.readAsText(file);
+        });
+
+        function parseSimulationData(text) {
+            const lines = text.split('\n');
+            let mode = 'UNKNOWN';
+            
+            staticGraph = { nodes: {}, edges: {} };
+            frames = [];
+            let currentFrame = null;
+
+            for (let line of lines) {
+                line = line.trim();
+                if (!line) continue;
+
+                if (line === 'NODES') { mode = 'NODES'; continue; }
+                if (line === 'EDGES') { mode = 'EDGES'; continue; }
+                if (line === 'END_GRAPH') { mode = 'UNKNOWN'; continue; }
+                if (line.startsWith('STATE')) {
+                    mode = 'STATE';
+                    const time = parseFloat(line.split(' ')[1]);
+                    currentFrame = { time: time, vehicles: [], lights: {} };
+                    continue;
+                }
+                if (line === 'END_STATE') {
+                    if (currentFrame) frames.push(currentFrame);
+                    currentFrame = null;
+                    mode = 'UNKNOWN';
+                    continue;
+                }
+
+                const parts = line.split(' ');
+
+                if (mode === 'NODES') {
+                    // ID X Y
+                    const id = parseInt(parts[0]);
+                    const x = parseFloat(parts[1]);
+                    const y = parseFloat(parts[2]);
+                    staticGraph.nodes[id] = { x, y };
+                } else if (mode === 'EDGES') {
+                    // ID Source Dest
+                    const id = parseInt(parts[0]);
+                    const src = parseInt(parts[1]);
+                    const dest = parseInt(parts[2]);
+                    staticGraph.edges[id] = { src, dest };
+                } else if (mode === 'STATE' && currentFrame) {
+                    if (parts[0] === 'V') {
+                        // V ID RoadID Position
+                        // Or V ID RoadID Position IsEmergency (if you added that column, assuming standard for now)
+                        // If standard output doesn't have isEmergency, we might guess based on ID (999) or standard color
+                        
+                        const vId = parseInt(parts[1]);
+                        const rId = parseInt(parts[2]);
+                        const pos = parseFloat(parts[3]);
+                        
+                        // Heuristic: If ID is 999, it's emergency (based on your chat)
+                        // Or random logic. Let's assume ID 999 is red.
+                        const isEmergency = (vId === 999); 
+                        
+                        currentFrame.vehicles.push({ id: vId, roadId: rId, pos, isEmergency });
+                    } else if (parts[0] === 'L') {
+                        // L NodeID GreenRoadID
+                        const nodeId = parseInt(parts[1]);
+                        const greenRoadId = parseInt(parts[2]);
+                        currentFrame.lights[nodeId] = greenRoadId;
+                    }
+                }
+            }
+
+            // Setup Viewport
+            fitGraphToScreen();
+            
+            // Enable Controls
+            document.getElementById('btnPlay').disabled = false;
+            document.getElementById('btnPause').disabled = false;
+            document.getElementById('btnReset').disabled = false;
+            document.getElementById('status').innerText = `Loaded ${frames.length} frames. Ready.`;
+            
+            // Draw Initial
+            currentFrameIndex = 0;
+            drawFrame();
+        }
+
+        // --- DRAWING LOGIC ---
+        function fitGraphToScreen() {
+            // Find bounds
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            const nodeIds = Object.keys(staticGraph.nodes);
+            if (nodeIds.length === 0) return;
+
+            nodeIds.forEach(id => {
+                const n = staticGraph.nodes[id];
+                if (n.x < minX) minX = n.x;
+                if (n.x > maxX) maxX = n.x;
+                if (n.y < minY) minY = n.y;
+                if (n.y > maxY) maxY = n.y;
+            });
+
+            // Add padding
+            const padding = 100;
+            const contentWidth = maxX - minX + padding * 2;
+            const contentHeight = maxY - minY + padding * 2;
+
+            const scaleX = canvas.width / contentWidth;
+            const scaleY = canvas.height / contentHeight;
+            const scale = Math.min(scaleX, scaleY);
+
+            transform.scale = scale;
+            transform.x = -minX * scale + (canvas.width - (maxX - minX) * scale) / 2;
+            transform.y = -minY * scale + (canvas.height - (maxY - minY) * scale) / 2;
+        }
+
+        function worldToScreen(x, y) {
+            return {
+                x: x * transform.scale + transform.x,
+                y: y * transform.scale + transform.y
+            };
+        }
+
+        function drawFrame() {
+            // Clear
+            ctx.fillStyle = "#2e7d32"; // Grass color
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // If no data
+            if (Object.keys(staticGraph.nodes).length === 0) return;
+
+            const frame = frames[currentFrameIndex] || { time: 0, vehicles: [], lights: {} };
+            document.getElementById('simTime').innerText = frame.time.toFixed(2);
+            document.getElementById('vehicleCount').innerText = frame.vehicles.length;
+
+            ctx.save();
+            // Apply Camera Transform
+            // We do manual transform for positions to handle lineWidth correctly independent of zoom if desired,
+            // but simplified standard transform is easier.
+            ctx.translate(transform.x, transform.y);
+            ctx.scale(transform.scale, transform.scale);
+
+            // 1. DRAW ROADS
+            Object.values(staticGraph.edges).forEach(edge => {
+                const startNode = staticGraph.nodes[edge.src];
+                const endNode = staticGraph.nodes[edge.dest];
+                
+                // Calculate Vector
+                const dx = endNode.x - startNode.x;
+                const dy = endNode.y - startNode.y;
+                const length = Math.sqrt(dx*dx + dy*dy);
+                const ux = dx / length;
+                const uy = dy / length;
+
+                // Offset Calculation: Shift road to the "right" relative to direction
+                // Perpendicular vector (-uy, ux)
+                const offsetAmount = LANE_WIDTH / 1.5; 
+                const offX = -uy * offsetAmount;
+                const offY = ux * offsetAmount;
+
+                // Draw Asphalt
+                ctx.beginPath();
+                ctx.moveTo(startNode.x + offX, startNode.y + offY);
+                ctx.lineTo(endNode.x + offX, endNode.y + offY);
+                ctx.strokeStyle = "#333";
+                ctx.lineWidth = LANE_WIDTH * 2.2; // Wide enough for a lane
+                ctx.lineCap = "round";
+                ctx.stroke();
+
+                // Draw Dashed Line (Center)
+                ctx.beginPath();
+                ctx.moveTo(startNode.x + offX, startNode.y + offY);
+                ctx.lineTo(endNode.x + offX, endNode.y + offY);
+                ctx.strokeStyle = "#FDD835"; // Yellow
+                ctx.lineWidth = 1;
+                ctx.setLineDash([10, 10]);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            });
+
+            // 2. DRAW INTERSECTIONS
+            Object.keys(staticGraph.nodes).forEach(id => {
+                const n = staticGraph.nodes[id];
+                
+                // Junction Box
+                ctx.fillStyle = "#555";
+                ctx.beginPath();
+                ctx.arc(n.x, n.y, INTERSECTION_RADIUS, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Traffic Lights
+                // Check state
+                const greenRoadId = frame.lights[id];
+                
+                // We need to verify which incoming roads are red or green
+                // This is purely visual: We draw a small dot at the "End" of incoming roads
+                
+                // Find all roads ending here
+                Object.keys(staticGraph.edges).forEach(edgeId => {
+                    const edge = staticGraph.edges[edgeId];
+                    if (edge.dest == id) {
+                        const startNode = staticGraph.nodes[edge.src];
+                        const dx = n.x - startNode.x;
+                        const dy = n.y - startNode.y;
+                        const len = Math.sqrt(dx*dx + dy*dy);
+                        
+                        // Position light slightly back from intersection center
+                        const lightDist = 20;
+                        const ux = dx / len;
+                        const uy = dy / len;
+                        
+                        // Offset to the right side (lane side)
+                        const offX = -uy * (LANE_WIDTH/1.5);
+                        const offY = ux * (LANE_WIDTH/1.5);
+
+                        const lx = n.x - ux * lightDist + offX;
+                        const ly = n.y - uy * lightDist + offY;
+
+                        ctx.beginPath();
+                        ctx.arc(lx, ly, 4, 0, Math.PI * 2);
+                        
+                        if (greenRoadId == edgeId) {
+                            ctx.fillStyle = "#00E676"; // Bright Green
+                            ctx.shadowColor = "#00E676";
+                            ctx.shadowBlur = 10;
+                        } else {
+                            ctx.fillStyle = "#FF1744"; // Red
+                            ctx.shadowColor = "#FF1744";
+                            ctx.shadowBlur = 5;
+                        }
+                        ctx.fill();
+                        ctx.shadowBlur = 0;
+                    }
+                });
+            });
+
+            // 3. DRAW VEHICLES
+            frame.vehicles.forEach(v => {
+                const edge = staticGraph.edges[v.roadId];
+                if (!edge) return;
+                
+                const start = staticGraph.nodes[edge.src];
+                const end = staticGraph.nodes[edge.dest];
+
+                // Calculate Pos
+                const dx = end.x - start.x;
+                const dy = end.y - start.y;
+                const len = Math.sqrt(dx*dx + dy*dy);
+                const ux = dx / len;
+                const uy = dy / len;
+
+                // Offset for lane
+                const offX = -uy * (LANE_WIDTH/1.5);
+                const offY = ux * (LANE_WIDTH/1.5);
+
+                const px = start.x + ux * v.pos + offX;
+                const py = start.y + uy * v.pos + offY;
+
+                // Draw Car Body
+                ctx.save();
+                ctx.translate(px, py);
+                ctx.rotate(Math.atan2(dy, dx)); // Rotate to face road direction
+
+                if (v.isEmergency) {
+                    ctx.fillStyle = "#FF5252"; // Red for Ambulance
+                    ctx.shadowColor = "red";
+                    ctx.shadowBlur = 10;
+                } else {
+                    ctx.fillStyle = "#448AFF"; // Blue for Car
+                    ctx.shadowBlur = 0;
+                }
+
+                // Simple Car Shape
+                ctx.fillRect(-CAR_LENGTH/2, -CAR_WIDTH/2, CAR_LENGTH, CAR_WIDTH);
+                
+                // Headlights
+                ctx.fillStyle = "#FFF";
+                ctx.fillRect(CAR_LENGTH/2 - 2, -CAR_WIDTH/2 + 1, 2, 2);
+                ctx.fillRect(CAR_LENGTH/2 - 2, CAR_WIDTH/2 - 3, 2, 2);
+
+                ctx.restore();
+            });
+
+            ctx.restore();
+        }
+
+        // --- ANIMATION LOOP ---
+        function loop() {
+            if (!isPlaying) return;
+
+            // Simple frame increment based on speed
+            // In a real app we'd use delta time, but frame-based is safer for discrete sim logs
+            currentFrameIndex += 1 * playbackSpeed;
+            
+            if (currentFrameIndex >= frames.length) {
+                currentFrameIndex = frames.length - 1;
+                isPlaying = false;
+                document.getElementById('btnPlay').disabled = false;
+                document.getElementById('status').innerText = "Simulation Finished.";
+            }
+
+            // Interpolation handling could go here for smoother motion
+            // For now, we floor the index
+            drawFrame();
+            
+            animationId = requestAnimationFrame(loop);
+        }
+
+        // --- CONTROLS ---
+        document.getElementById('btnPlay').onclick = () => {
+            if (frames.length === 0) return;
+            if (currentFrameIndex >= frames.length - 1) currentFrameIndex = 0;
+            isPlaying = true;
+            document.getElementById('btnPlay').disabled = true;
+            loop();
+        };
+
+        document.getElementById('btnPause').onclick = () => {
+            isPlaying = false;
+            document.getElementById('btnPlay').disabled = false;
+            cancelAnimationFrame(animationId);
+        };
+
+        document.getElementById('btnReset').onclick = () => {
+            isPlaying = false;
+            document.getElementById('btnPlay').disabled = false;
+            cancelAnimationFrame(animationId);
+            currentFrameIndex = 0;
+            drawFrame();
+        };
+
+        document.getElementById('speedRange').oninput = (e) => {
+            playbackSpeed = parseInt(e.target.value);
+            document.getElementById('speedValue').innerText = playbackSpeed + "x";
+        };
+
+        // --- PAN/ZOOM ---
+        canvas.onmousedown = (e) => {
+            isDragging = true;
+            dragStart = { x: e.clientX, y: e.clientY };
+        };
+        window.onmouseup = () => isDragging = false;
+        window.onmousemove = (e) => {
+            if (!isDragging) return;
+            const dx = e.clientX - dragStart.x;
+            const dy = e.clientY - dragStart.y;
+            transform.x += dx;
+            transform.y += dy;
+            dragStart = { x: e.clientX, y: e.clientY };
+            drawFrame();
+        };
+        canvas.onwheel = (e) => {
+            e.preventDefault();
+            const zoomSensitivity = 0.001;
+            const zoom = Math.exp(-e.deltaY * zoomSensitivity);
+            
+            // Zoom towards mouse pointer logic usually requires complex math,
+            // Simple zoom for now:
+            transform.scale *= zoom;
+            drawFrame();
+        };
+
+    </script>
+</body>
+</html>
