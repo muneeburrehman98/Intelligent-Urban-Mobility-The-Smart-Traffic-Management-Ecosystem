@@ -4,31 +4,46 @@
 #include <algorithm>
 
 int Intersection::decideNextGreenLight(double currentTime) {
-    // Smart Traffic Light Logic:
-    // Find the incoming road with the longest queue of vehicles waiting.
-    
-    int bestRoadIndex = -1;
-    double maxQueue = -1.0;
-
-    for (int i = 0; i < incomingRoads.size(); ++i) {
-        double qLen = incomingRoads[i]->getQueueLength();
-        if (qLen > maxQueue) {
-            maxQueue = qLen;
-            bestRoadIndex = i;
+    // 1. EMERGENCY PRIORITY CHECK
+    // Scan all incoming roads for emergency vehicles
+    for (Road* r : incomingRoads) {
+        for (Vehicle* v : r->vehicleQueue) {
+            if (v->isEmergency) {
+                // Determine index for updating state
+                for(int i=0; i<incomingRoads.size(); ++i) {
+                    if(incomingRoads[i]->id == r->id) {
+                        // SILENCED DEBUG PRINT FOR STATS REPORT
+                        // if (greenLightRoadIndex != i) {
+                        //    std::cout << "[t=" << currentTime << "] !!! EMERGENCY OVERRIDE !!! at Intersection " 
+                        //              << id << " for Ambulance V" << v->id << " on Road " << r->id << std::endl;
+                        // }
+                        greenLightRoadIndex = i;
+                        break;
+                    }
+                }
+                lastLightChangeTime = currentTime;
+                return r->id;
+            }
         }
     }
 
-    // If all queues are empty, keep current or switch round-robin?
-    // For now, if empty, just keep current or pick first.
-    if (maxQueue == 0 && greenLightRoadIndex != -1) {
-        return incomingRoads[greenLightRoadIndex]->id;
+    // 2. ROUND ROBIN LOGIC (Fairness)
+    int numRoads = incomingRoads.size();
+    if (numRoads == 0) return -1;
+
+    int startIndex = (greenLightRoadIndex + 1) % numRoads;
+
+    for (int i = 0; i < numRoads; ++i) {
+        int idx = (startIndex + i) % numRoads;
+        if (incomingRoads[idx]->getQueueLength() > 0) {
+            greenLightRoadIndex = idx;
+            lastLightChangeTime = currentTime;
+            return incomingRoads[idx]->id;
+        }
     }
 
-    if (bestRoadIndex != -1) {
-        greenLightRoadIndex = bestRoadIndex;
-        lastLightChangeTime = currentTime;
-        return incomingRoads[bestRoadIndex]->id;
-    }
-    
-    return -1;
+    // 3. FALLBACK
+    greenLightRoadIndex = startIndex;
+    lastLightChangeTime = currentTime;
+    return incomingRoads[startIndex]->id;
 }

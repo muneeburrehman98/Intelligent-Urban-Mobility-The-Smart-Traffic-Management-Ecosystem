@@ -347,13 +347,66 @@ void TrafficNetwork::runSimulation(double duration) {
 
 
 
+// FILE: TrafficNetwork.cpp
+
 void TrafficNetwork::processEvent(const Event& event) {
     if (event.type == LIGHT_CHANGE) {
         int intersectionID = event.entityID;
         if (intersections.find(intersectionID) != intersections.end()) {
-            int greenRoadID = intersections[intersectionID]->decideNextGreenLight(currentTime);
-            // Schedule next check
-            scheduleEvent(currentTime + 5.0, LIGHT_CHANGE, intersectionID);
+            Intersection* intersection = intersections[intersectionID];
+            
+            // 1. Decide WHICH road gets green (This handles the switch)
+            int greenRoadID = intersection->decideNextGreenLight(currentTime);
+            
+            // 2. Decide HOW LONG (Adaptive Timing)
+            double greenDuration = 5.0; // Default minimum
+            
+            // Find the active road object
+            Road* activeRoad = nullptr;
+            for (Road* r : intersection->incomingRoads) {
+                if (r->id == greenRoadID) {
+                    activeRoad = r;
+                    break;
+                }
+            }
+
+            if (activeRoad) {
+                // CHECK FOR AMBULANCE POSITION
+                int ambulanceIndex = -1;
+                for (size_t i = 0; i < activeRoad->vehicleQueue.size(); ++i) {
+                    if (activeRoad->vehicleQueue[i]->isEmergency) {
+                        ambulanceIndex = i;
+                        break; // Found the first ambulance
+                    }
+                }
+
+                if (ambulanceIndex != -1) {
+                    // --- EMERGENCY LOGIC ---
+                    // Calculate time needed to clear everything UP TO the ambulance.
+                    // We use a slightly generous multiplier (2.5s per car) to ensure it definitely clears.
+                    double timeToClear = (ambulanceIndex + 1) * 2.5; 
+                    
+                    // Enforce a safe minimum (e.g. 10s), but NO MAXIMUM limit.
+                    // The light stays green until the ambulance is predicted to leave.
+                    greenDuration = (timeToClear < 10.0) ? 10.0 : timeToClear;
+
+                    std::cout << "[EMERGENCY] Extending Green Light to " << greenDuration 
+                              << "s for Ambulance at queue position " << ambulanceIndex << std::endl;
+                } 
+                else {
+                    // --- NORMAL LOGIC (Fairness) ---
+                    double queueSize = activeRoad->getQueueLength();
+                    double neededTime = queueSize * 2.0; 
+                    
+                    // Cap at 30 seconds so normal traffic doesn't block others forever
+                    if (neededTime < 5.0) greenDuration = 5.0;
+                    else if (neededTime > 30.0) greenDuration = 30.0;
+                    else greenDuration = neededTime;
+                }
+            }
+
+            // Schedule the NEXT light change
+            scheduleEvent(currentTime + greenDuration, LIGHT_CHANGE, intersectionID);
         }
     }
 }
